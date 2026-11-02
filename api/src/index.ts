@@ -2,6 +2,13 @@ import { Hono } from 'hono'
 
 const app = new Hono<{ Bindings: Env }>()
 
+app.notFound((c) => c.json({ error: 'Not found' }, 404))
+
+app.onError((error, c) => {
+  console.error('Unhandled API error', error)
+  return c.json({ error: 'Internal server error' }, 500)
+})
+
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
 
 // ─── Part 1: Homes and Members ──────────────────────────────────────────

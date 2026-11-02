@@ -77,15 +77,18 @@ function BillSplitterApp() {
   const loadHomes = useCallback(async () => {
     try {
       const res = await fetch('/api/homes')
-      if (res.ok) {
-        const data = (await res.json()) as { homes: Home[] }
-        setHomes(data.homes || [])
-        if (data.homes && data.homes.length > 0 && data.homes[0] && !selectedHomeId) {
-          setSelectedHomeId(data.homes[0].id)
-        }
+      if (!res.ok) {
+        setGlobalError(`Unable to load homes (HTTP ${res.status}).`)
+        return
+      }
+
+      const data = (await res.json()) as { homes: Home[] }
+      setHomes(data.homes || [])
+      if (data.homes && data.homes.length > 0 && data.homes[0] && !selectedHomeId) {
+        setSelectedHomeId(data.homes[0].id)
       }
     } catch {
-      // API might be starting up
+      setGlobalError('Failed to connect to the API server. Please verify the service is running.')
     }
   }, [selectedHomeId])
 
@@ -106,30 +109,31 @@ function BillSplitterApp() {
         fetch(`/api/homes/${homeId}/balances`),
       ])
 
-      if (membersRes.status === 404) {
-        setGlobalError('Selected home does not exist (404).')
+      const failedResponse = [membersRes, billsRes, balancesRes].find((response) => !response.ok)
+      if (failedResponse) {
+        setGlobalError(
+          failedResponse.status === 404
+            ? 'Selected home does not exist (404).'
+            : `Unable to load home data (HTTP ${failedResponse.status}).`,
+        )
         setMembers([])
         setBills([])
         setBalances([])
-        setIsLoading(false)
         return
       }
 
-      if (membersRes.ok) {
-        const memData = (await membersRes.json()) as { members: Member[] }
-        setMembers(memData.members || [])
-      }
-
-      if (billsRes.ok) {
-        const billsData = (await billsRes.json()) as { bills: Bill[] }
-        setBills(billsData.bills || [])
-      }
-
-      if (balancesRes.ok) {
-        const balData = (await balancesRes.json()) as { balances: Balance[] }
-        setBalances(balData.balances || [])
-      }
+      const [memData, billsData, balData] = (await Promise.all([
+        membersRes.json(),
+        billsRes.json(),
+        balancesRes.json(),
+      ])) as [{ members: Member[] }, { bills: Bill[] }, { balances: Balance[] }]
+      setMembers(memData.members || [])
+      setBills(billsData.bills || [])
+      setBalances(balData.balances || [])
     } catch {
+      setMembers([])
+      setBills([])
+      setBalances([])
       setGlobalError('Failed to connect to the API server. Please verify the service is running.')
     } finally {
       setIsLoading(false)
