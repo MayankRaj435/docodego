@@ -152,6 +152,25 @@ You must understand every line you submit. We check this with your video and in 
 2. Build your solution in your new repository. Small, clear commits are welcome.
 3. Update this README with a short section called **Decisions**. Write 3 decisions you made and why.
 4. Record a video of **3 minutes or less** (Loom or unlisted YouTube). Show the architecture, the data flow, and one trade-off you made. Make sure anyone with the link can view it.
-5. Paste the repository link and the video link in the application form.
+5. We will run `pnpm install && pnpm check && pnpm typecheck && pnpm test` on your repository.
 
-We will run `pnpm install && pnpm check && pnpm typecheck && pnpm test` on your repository.
+## Decisions
+
+### 1. Integer-Only Cent Accounting & Deterministic Remainder Distribution
+
+- **Decision:** All monetary amounts are handled and stored strictly as whole integers in cents (`INTEGER NOT NULL`), strictly avoiding floating-point numbers (`Math.floor(total / count)` with remainder `total % count`). When a bill cannot be divided evenly (such as 1,000 cents among 3 members), extra cents are distributed +1 to members in the deterministic order they joined the home (`ORDER BY created_at ASC, rowid ASC`).
+- **Why:** Floating-point math introduces rounding drift in financial software. Cent integers guarantee that the sum of all member shares always strictly equals `totalCents`. Using SQLite's `rowid` alongside `created_at` preserves exact insertion order even when members are added within the same second.
+
+### 2. Atomic Batch Persistence & Concurrency-Safe Idempotent Payments
+
+- **Decision:**
+  - When splitting a bill, the bill record and all generated share records are committed together in a single atomic batch via `c.env.DB.batch([billStmt, ...shareStmts])`.
+  - For share payments, we enforce idempotency via the `Idempotency-Key` header paired with an atomic conditional update: `UPDATE shares SET paid_at = ?, idempotency_key = ? WHERE id = ? AND bill_id = ? AND paid_at IS NULL`. When `meta.changes === 0`, the handler queries the share record to differentiate an identical replay (returns `200` with original `paidAt`) from an unauthorized second payment or concurrent race with a differing key (returns `409 Conflict`).
+- **Why:** Batch persistence prevents partial state (an orphaned bill with zero shares). Conditional atomic updates at the database level eliminate race conditions during simultaneous payment attempts without needing distributed locks or Redis.
+
+### 3. Multi-Layer Data Constraints & Resilient Frontend State Isolation
+
+- **Decision:**
+  - We enforced data safety in depth: at the database tier using 7 named constraints (`fk_members_home`, `chk_bills_total_positive`, `fk_bills_home`, `fk_shares_bill`, `fk_shares_member`, `chk_shares_amount_non_negative`, `uq_shares_idempotency`), and at the API route tier via explicit schema and type validations.
+  - On the web client, payment operations and form actions isolate their loading and error states per row. If a payment request fails or times out, the share remains unpaid, a targeted inline error is displayed, and the rest of the application remains fully interactive without crashing.
+- **Why:** Database constraints prevent data corruption even in edge cases or direct database access. Per-item state isolation on the client ensures that slow or erroneous API responses never freeze or crash the user interface.
